@@ -1,0 +1,17 @@
+version: "1.0"
+name: "predictive-cloud-architect"
+description: "An OpenEnv-compliant RL environment for autonomous microservice orchestration, proactive autoscaling, and incident mitigation."
+entrypoint: "server.PSHCA_environment:PshcaEnvironment"
+models:
+  observation: "models:PshcaObservation"
+  action: "models:PshcaAction"
+tasks:
+  - id: "task_1_easy"
+    description: "CPU Spike Response: web-server-01 experiences a rapid CPU surge. Scale up or reboot it before the crash threshold is reached."
+    difficulty: "easy"
+  - id: "task_2_medium"
+    description: "Memory Leak Recovery: db-main develops a gradual memory leak. Clear its cache or failover the DB before it crashes out-of-memory."
+    difficulty: "medium"
+  - id: "task_3_hard"
+    description: "Cascading Deployment Failure: A bad deployment overloads both web servers and the primary DB. Trace the root cause and rollback the deployment to restore full service."
+    difficulty: "hard"
