@@ -21,6 +21,7 @@ Features:
   - Per-scenario timing
   - Final grader report with pass/fail per task
   - Graceful fallback to hardcoded optimal strategies when no API key is set
+  - [START] / [STEP] / [END] structured stdout logs for automated grading
 
 Usage:
     # With Hugging Face / OpenAI-compatible endpoint:
@@ -82,6 +83,72 @@ RED    = lambda t: _c("91", t)
 CYAN   = lambda t: _c("96", t)
 BOLD   = lambda t: _c("1",  t)
 DIM    = lambda t: _c("2",  t)
+
+# ---------------------------------------------------------------------------
+# Structured log helpers — required by the hackathon checker
+# ---------------------------------------------------------------------------
+def log_start(task: str, task_info: str) -> None:
+    """Emit the [START] structured log line for a new episode."""
+    print(json.dumps({
+        "type": "START",
+        "task": task,
+        "task_info": task_info,
+        "timestamp": time.time(),
+    }), flush=True)
+
+
+def log_step(
+    task: str,
+    step: int,
+    action_type: str,
+    target_resource: str,
+    thought: str,
+    confidence: float,
+    reward: float,
+    done: bool,
+    observation: dict,
+) -> None:
+    """Emit a [STEP] structured log line after each env.step() call."""
+    print(json.dumps({
+        "type": "STEP",
+        "task": task,
+        "step": step,
+        "action": {
+            "action_type": action_type,
+            "target_resource": target_resource,
+        },
+        "thought": thought,
+        "confidence": round(confidence, 4),
+        "reward": round(reward, 4),
+        "done": done,
+        "observation": observation,
+        "timestamp": time.time(),
+    }), flush=True)
+
+
+def log_end(task: str, total_steps: int, final_reward: float, success: bool, elapsed: float) -> None:
+    """Emit the [END] structured log line when an episode terminates."""
+    print(json.dumps({
+        "type": "END",
+        "task": task,
+        "total_steps": total_steps,
+        "final_reward": round(final_reward, 4),
+        "success": success,
+        "elapsed_seconds": round(elapsed, 2),
+        "timestamp": time.time(),
+    }), flush=True)
+
+
+def obs_to_dict(obs) -> dict:
+    """Convert a PshcaObservation to a plain dict for JSON serialisation."""
+    return {
+        "cpu_usage": obs.cpu_usage,
+        "memory_usage": obs.memory_usage,
+        "service_status": obs.service_status,
+        "active_alerts": obs.active_alerts,
+        "current_task_info": obs.current_task_info,
+    }
+
 
 # ---------------------------------------------------------------------------
 # System Prompt
@@ -271,6 +338,9 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
     print(f"  {BOLD(label)} — {task_info}")
     print(f"{'=' * 62}")
 
+    # ✅ Emit [START] structured log
+    log_start(task=scenario, task_info=task_info)
+
     done = False
     step = 0
     final_reward = 0.0
@@ -349,7 +419,7 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
 
         action, thought, confidence = action_bundle
 
-        # Log the chosen action
+        # Log the chosen action (human-readable)
         action_colour = GREEN if action.action_type != "wait" else YELLOW
         print(
             f"\n  {BOLD('→')} Agent action: "
@@ -360,9 +430,10 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
         print(f"  {DIM('Confidence')} : {confidence:.2f}")
 
         # Step the environment
-        obs = env.step(action)
-        done = obs.done
-        final_reward = obs.reward if obs.reward is not None else 0.0
+        result = env.step(action)
+        done = result.done
+        final_reward = result.reward if result.reward is not None else 0.0
+
         episode_memory.append(
             {
                 "step": step,
@@ -370,17 +441,43 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
                 "target_resource": action.target_resource,
                 "reward": final_reward,
                 "done": done,
-                "alerts": obs.active_alerts,
+                "alerts": result.active_alerts,
             }
         )
 
+        # ✅ Emit [STEP] structured log — after every env.step()
+        log_step(
+            task=scenario,
+            step=step,
+            action_type=action.action_type,
+            target_resource=action.target_resource or "",
+            thought=thought,
+            confidence=confidence,
+            reward=final_reward,
+            done=done,
+            observation=obs_to_dict(result),
+        )
+
+        obs = result  # advance observation
+
     elapsed = time.time() - start_time
-    outcome = GREEN("✓ SUCCESS") if final_reward >= 0.5 else RED("✗ FAILED")
+    success = final_reward >= 0.5
+    outcome = GREEN("✓ SUCCESS") if success else RED("✗ FAILED")
     print(
         f"\n  {outcome} | Steps: {step}/{env.MAX_STEPS} | "
         f"Score: {BOLD(f'{final_reward:.2f}')}/1.00 | "
         f"Time: {elapsed:.1f}s"
     )
+
+    # ✅ Emit [END] structured log — once per episode
+    log_end(
+        task=scenario,
+        total_steps=step,
+        final_reward=final_reward,
+        success=success,
+        elapsed=elapsed,
+    )
+
     return final_reward
 
 
