@@ -19,10 +19,10 @@ Endpoints:
 
 Usage:
     # Development (with auto-reload):
-    uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
+    uvicorn server.app:app --reload --host 0.0.0.0 --port 7860
 
     # Production:
-    uvicorn server.app:app --host 0.0.0.0 --port 8000 --workers 4
+    uvicorn server.app:app --host 0.0.0.0 --port 7860 --workers 4
 
     # Or run directly:
     python -m server.app
@@ -251,14 +251,27 @@ async def dashboard_events():
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def main():
-    import uvicorn
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    uvicorn.run(app, host=args.host, port=args.port)
+def main(host: str = "0.0.0.0", port: int = 7860) -> None:
+    """Start the PSHCA FastAPI server.
 
-if __name__ == '__main__':
+    Callable both programmatically (e.g. by the OpenEnv validator) and from
+    the command line.  Port defaults to 7860 for HuggingFace Spaces.
+    """
+    import uvicorn
+
+    # Only parse CLI args when invoked directly — prevents argparse from
+    # consuming sys.argv when main() is imported and called by validators.
+    if __name__ == "__main__":
+        import argparse
+        parser = argparse.ArgumentParser(description="PSHCA Environment Server")
+        parser.add_argument("--host", type=str, default=host)
+        parser.add_argument("--port", type=int, default=port)
+        args = parser.parse_args()
+        host = args.host
+        port = args.port
+
+    uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
     main()

@@ -13,7 +13,9 @@ tags:
 
 # Predictive Self-Healing Cloud Architect (PSHCA) Environment
 
-A sophisticated real-world simulation of cloud infrastructure designed to test and train AI models acting as Site Reliability Engineers (SRE) or Cloud Architects.
+**Built for the Meta Hackathon**
+
+A sophisticated real-world simulation of cloud infrastructure designed to test and train AI models acting as Site Reliability Engineers (SRE) or Cloud Architects. This project uses OpenEnv to create a rigorous evaluation environment for LLMs.
 
 ## Description & Motivation
 
@@ -130,8 +132,12 @@ PSHCA/
 ├── models.py              # Action and Observation models
 ├── inference.py          # LLM Grader and Eval script
 ├── baseline_inference.py  # Legacy compatibility wrapper
+├── client.py              # Client script for interacting with the environment
+├── Dockerfile             # Container image definition for the environment
 └── server/
-    ├── PSHCA_environment.py  # Core environment simulation logic
+    ├── __init__.py        # Server module initialization
     ├── app.py             # FastAPI application
-    └── Dockerfile         # Container image definition
+    ├── Dockerfile         # Container image definition for the backend server
+    ├── PSHCA_environment.py  # Core environment simulation logic
+    └── requirements.txt   # Python dependencies for the server
 ```
