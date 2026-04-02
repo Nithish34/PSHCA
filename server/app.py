@@ -16,7 +16,7 @@ except (ModuleNotFoundError, ImportError):
 
 import asyncio, json
 from fastapi import Body
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
 
 app = create_app(PshcaEnvironment, PshcaAction, PshcaObservation, env_name="PSHCA", max_concurrent_envs=1)
 dashboard_env = PshcaEnvironment()
@@ -242,6 +242,14 @@ getState();
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page():
     return HTMLResponse(content=DASHBOARD_HTML)
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/dashboard")
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 @app.post("/dashboard/reset")
 async def dashboard_reset():
