@@ -63,8 +63,8 @@ COPY --from=builder /app/env /app/env
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/env:$PYTHONPATH"
 
-# HuggingFace Spaces requires port 7860
-EXPOSE 7860
+# HuggingFace Spaces configured port in README.md is 8000
+EXPOSE 8000
 
-# Start the FastAPI server on port 7860 (required by HuggingFace Spaces)
-CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 7860"]
+# Start the FastAPI server on port 8000
+CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
