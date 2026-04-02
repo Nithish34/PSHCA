@@ -240,12 +240,9 @@ getState();
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse)
 async def dashboard_page():
     return HTMLResponse(content=DASHBOARD_HTML)
-
-@app.get("/")
-async def root():
-    return RedirectResponse(url="/dashboard")
 
 @app.get("/health")
 async def health_check():
