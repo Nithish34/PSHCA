@@ -90,6 +90,24 @@ Features:
 
 ## Setup Instructions
 
+### Environment Configuration
+
+Before running the inference scripts, you need to set up your environment variables:
+
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` and fill in your values:
+   ```bash
+   API_BASE_URL="https://api-inference.huggingface.co/v1"  # Your API endpoint
+   HF_TOKEN="hf_your_token_here"                           # Get from https://huggingface.co/settings/tokens
+   MODEL_NAME="gpt-4o-mini"                               # Your chosen model
+   ```
+
+3. The `.gitignore` file excludes `.env` to protect your secrets. Never commit actual credentials!
+
 ### Running Locally
 You can run the environment server locally for development:
 ```bash
