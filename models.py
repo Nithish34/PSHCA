@@ -28,7 +28,8 @@ class PshcaAction(Action):
         "rollback_deployment",
         "clear_cache",
         "failover_db",
-        "wait"
+        "wait",
+        "escalate_to_human"
     ] = Field(..., description="The self-healing action to perform")
     
     target_resource: str = Field(

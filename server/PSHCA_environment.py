@@ -104,7 +104,29 @@ HARD_SCENARIOS = [
         "correct_actions": [("clear_cache", "db-main"), ("scale_up", "web-server-01")],
         "multi_step": True,
     },
+    {
+        "id": "C1",
+        "title": "Configuration Drift Detected",
+        "description": "A recent config push changed nginx worker_processes to 0 on web-server-01, causing request queuing.",
+        "correct_actions": [("rollback_deployment", "web-server-01")],
+        "symptoms": "High latency but NORMAL CPU — the key differentiator from a CPU spike",
+        "multi_step": False,
+    },
+    {
+        "id": "H4",
+        "title": "Canary Deployment Gone Wrong",
+        "description": "20% canary rollout causing errors only on web-server-01. web-server-02 is healthy — rollback the canary only.",
+        "correct_actions": [("rollback_deployment", "web-server-01")],
+        "wrong_actions_penalised": [("reboot_server", "web-server-02"), ("rollback_deployment", "web-server-02")],
+        "multi_step": False,
+    },
 ]
+
+SERVICE_DEPENDENCIES = {
+    "api":      ["web-server-01", "web-server-02"],
+    "database": ["db-main", "db-replica"],
+    "cache":    ["db-main"],
+}
 
 
 class PshcaEnvironment(Environment):
@@ -144,6 +166,9 @@ class PshcaEnvironment(Environment):
         self.cumulative_reward: float = 0.0
         self.event_history: List[Dict[str, Any]] = []
         self.max_event_history: int = 200
+        self.incident_start_step: int = 1
+        self.action_taken_this_episode: bool = False
+        self.severity: str = "SEV3 — Monitoring"
 
     def get_task_info(self) -> str:
         if not self.active_scenario:
@@ -170,6 +195,69 @@ class PshcaEnvironment(Environment):
         self.last_action = None
         self.cumulative_reward = 0.0
         self.event_history = []
+        self.incident_start_step = 1
+        self.action_taken_this_episode = False
+        self.severity = "SEV3 — Monitoring"
+
+    def _classify_severity(self) -> str:
+        if any("[Fatal]" in a or "SEV0" in a for a in self.active_alerts):
+            return "SEV0 — Complete Outage"
+        if any("[Critical]" in a or "[ESCALATED]" in a for a in self.active_alerts):
+            return "SEV1 — Critical Degradation"  
+        if any("[Warning]" in a for a in self.active_alerts):
+            return "SEV2 — Performance Degradation"
+        return "SEV3 — Monitoring"
+
+    def _check_slo_breach(self) -> List[str]:
+        breaches = []
+        for host, val in self.latency_ms.items():
+            if val > 500:
+                breaches.append(f"SLO BREACH: {host} API p99 latency exceeds 500ms target")
+        for host, val in self.error_rate.items():
+            if val > 1.0:
+                breaches.append(f"SLO BREACH: {host} Error rate exceeds 1% SLO")
+        return breaches
+
+    def _get_degraded_nodes(self) -> List[str]:
+        nodes = set()
+        for node, cpu in self.cpu_usage.items():
+            if cpu > 70: nodes.add(node)
+        for node, mem in self.memory_usage.items():
+            if mem > 70: nodes.add(node)
+        for node, lat in self.latency_ms.items():
+            if lat > 500: nodes.add(node)
+        return list(nodes)
+
+    def _calculate_blast_radius(self) -> List[str]:
+        affected = []
+        for node in self._get_degraded_nodes():
+            for svc, deps in SERVICE_DEPENDENCIES.items():
+                if node in deps:
+                    affected.append(f"{svc} depends on {node}")
+        return affected
+
+    def _count_repeats(self) -> int:
+        repeats = 0
+        seen = []
+        for ev in self.event_history:
+            act = f"{ev['action']['action_type']}:{ev['action']['target_resource']}"
+            if act in seen and act != "wait:":
+                repeats += 1
+            seen.append(act)
+        return repeats
+
+    def generate_postmortem(self) -> dict:
+        return {
+            "incident_id": self._state.episode_id,
+            "scenario": self.active_scenario.get("title", ""),
+            "severity": self._classify_severity(),
+            "mttr_steps": self._state.step_count,
+            "root_cause": self.active_scenario.get("description", ""),
+            "resolution": self.correct_steps_taken,
+            "repeated_actions": self._count_repeats(),
+            "outcome": "RESOLVED" if self.cumulative_reward >= 0.5 else "FAILED",
+            "lessons_learned": "Need better isolation between components" if self.scenario_state > 3 else "Fast response prevented major issues"
+        }
 
     def _repeat_penalty(self, action: PshcaAction) -> float:
         if self.last_action is None:
@@ -192,14 +280,24 @@ class PshcaEnvironment(Environment):
         if action.action_type == "wait":
             return 0.05 + penalty, False, "Stalling: metrics worsen each step. Act now."
 
+        if action.action_type == "escalate_to_human":
+            return -0.2 + penalty, False, "Premature escalation — this was solvable autonomously."
+
+        self.action_taken_this_episode = True
+
+        mttr_steps = self._state.step_count - self.incident_start_step
         if (action.action_type, action.target_resource) in correct:
             cpu_now = self.cpu_usage.get(node, 0)
-            if cpu_now < 60:
-                score, msg = 1.0, f"Perfect early intervention! {node} CPU stabilised."
-            elif cpu_now < 85:
-                score, msg = 0.9, f"Good — caught before crash. CPU was {cpu_now:.0f}%."
+            if mttr_steps <= 2:
+                base_score, msg = 1.0, f"Excellent MTTR: resolved in {mttr_steps} steps. {node} CPU stabilised."
+            elif mttr_steps <= 5:
+                base_score, msg = 0.85, f"Good MTTR: {node} CPU stabilised."
+            elif mttr_steps <= 10:
+                base_score, msg = 0.6, f"Acceptable MTTR."
             else:
-                score, msg = 0.75, f"Late but successful. CPU was critical at {cpu_now:.0f}%."
+                base_score, msg = 0.3, "Poor MTTR — too slow."
+            score = base_score
+
             self.cpu_usage[node] = max(20.0, self.cpu_usage[node] - 55.0)
             self.latency_ms[node] = 45.0
             self.error_rate[node] = 0.0
@@ -222,14 +320,23 @@ class PshcaEnvironment(Environment):
         if action.action_type == "wait":
             return 0.05 + penalty, False, "Memory leak worsening — every step counts."
 
+        if action.action_type == "escalate_to_human":
+            return -0.2 + penalty, False, "Premature escalation — this was solvable autonomously."
+
+        self.action_taken_this_episode = True
+
+        mttr_steps = self._state.step_count - self.incident_start_step
         if (action.action_type, action.target_resource) in correct:
             mem_now = self.memory_usage.get(leak_node, 0)
-            if mem_now < 65:
-                score, msg = 1.0, "Proactive! Memory cleared before service degradation."
-            elif mem_now < 85:
-                score, msg = 0.85, f"Good response — memory was {mem_now:.0f}%, caught in time."
+            if mttr_steps <= 2:
+                base_score, msg = 1.0, f"Excellent MTTR: resolved in {mttr_steps} steps. Memory cleared."
+            elif mttr_steps <= 5:
+                base_score, msg = 0.85, f"Good MTTR: memory cleared."
+            elif mttr_steps <= 10:
+                base_score, msg = 0.6, f"Acceptable MTTR."
             else:
-                score, msg = 0.7, f"Last-minute fix. Memory was critical at {mem_now:.0f}%."
+                base_score, msg = 0.3, "Poor MTTR — too slow."
+            score = base_score
             self.memory_usage[leak_node] = 45.0
             self.latency_ms[leak_node] = 14.0
             self.disk_io[leak_node] = 20.0
@@ -254,18 +361,33 @@ class PshcaEnvironment(Environment):
         if action.action_type == "wait":
             return 0.0 + penalty, False, "Cascading failure is accelerating — do not wait."
 
+        if action.action_type == "escalate_to_human":
+            if self.scenario_state >= 3:
+                return 0.6 + penalty, True, "Smart escalation — correctly identified need for human judgment"
+            else:
+                return -0.2 + penalty, False, "Premature escalation — this was solvable autonomously"
+
+        wrong_penalised = self.active_scenario.get("wrong_actions_penalised", [])
+        if (action.action_type, action.target_resource) in wrong_penalised:
+            return -0.5 + penalty, False, "Destructive action: You modified a healthy resource."
+
+        self.action_taken_this_episode = True
+
         pair = (action.action_type, action.target_resource)
+        mttr_steps = self._state.step_count - self.incident_start_step
 
         if not multi:
             if pair in correct:
-                if self.scenario_state <= 1:
-                    return 1.0 + penalty, True, "Rapid root-cause ID! Full score — cascade stopped."
-                elif self.scenario_state == 2:
-                    return 0.8 + penalty, True, "Correct — cascade halted."
+                if mttr_steps <= 2:
+                    return 1.0 + penalty, True, f"Excellent MTTR: Rapid root-cause ID in {mttr_steps} steps! Full score."
+                elif mttr_steps <= 5:
+                    return 0.8 + penalty, True, "Good MTTR: cascade halted."
+                elif mttr_steps <= 10:
+                    return 0.55 + penalty, True, "Acceptable MTTR: Late but cluster recovered."
                 else:
-                    return 0.55 + penalty, True, "Late but cluster recovered."
+                    return 0.3 + penalty, True, "Poor MTTR — too slow."
             if action.action_type in ("scale_up", "reboot_server"):
-                return 0.1 + penalty, False, "Symptomatic fix — addresses overload but not root cause (bad deploy)."
+                return 0.1 + penalty, False, "Symptomatic fix — addresses overload but not root cause."
             return -0.1 + penalty, False, "Wrong action worsens the cascade."
 
         else:
@@ -275,7 +397,10 @@ class PshcaEnvironment(Environment):
                 return 0.5 + penalty, False, "Step 1 correct! Now address the secondary failure."
             if pair == correct[1] and len(self.correct_steps_taken) == 1:
                 self.correct_steps_taken.append(step_key)
-                return 1.0 + penalty, True, "Both steps correct — cascade fully resolved!"
+                if mttr_steps <= 5:
+                    return 1.0 + penalty, True, "Excellent MTTR: Both steps correct!"
+                else:
+                    return 0.7 + penalty, True, "Good: Both steps correct."
             if pair in correct and step_key in self.correct_steps_taken:
                 return 0.3 + penalty, False, "Already done. Address the next failure point."
             return 0.0 + penalty, False, "Incorrect step in cascade resolution sequence."
@@ -322,6 +447,10 @@ class PshcaEnvironment(Environment):
             "active_alerts": list(self.active_alerts),
             "cumulative_reward": round(self.cumulative_reward, 4),
             "recent_events": list(self.event_history[-25:]),
+            "severity": self._classify_severity(),
+            "blast_radius": self._calculate_blast_radius(),
+            "mttr_steps": self._state.step_count - self.incident_start_step,
+            "postmortem": self.generate_postmortem() if self._state.step_count >= self.MAX_STEPS or self.cumulative_reward >= 0.5 or self.cumulative_reward < -0.5 else None,
         }
 
     def _get_observation(self, reward=None, done=False, feedback=""):
@@ -348,6 +477,8 @@ class PshcaEnvironment(Environment):
                 "feedback": feedback,
                 "step_count": self._state.step_count,
                 "episode_id": self._state.episode_id,
+                "severity": self._classify_severity(),
+                "blast_radius": self._calculate_blast_radius(),
             }
         )
 
@@ -377,6 +508,21 @@ class PshcaEnvironment(Environment):
         else:
             reward, done, feedback = self._step_hard(action, action_valid)
 
+        slo_breaches = self._check_slo_breach()
+        for b in slo_breaches:
+            if b not in self.active_alerts:
+                self.active_alerts.append(b)
+
+        # Escalation severity over time
+        if self.scenario_state == 3 and not self.action_taken_this_episode:
+            self.severity = "SEV1"
+            if not any("SEV1" in a for a in self.active_alerts):
+                self.active_alerts.append("[ESCALATED] Incident upgraded to SEV1 — management notified")
+        if self.scenario_state == 5:
+            self.severity = "SEV0"  
+            if not any("SEV0" in a for a in self.active_alerts):
+                self.active_alerts.append("[ESCALATED] SEV0 declared — full incident response activated")
+
         if self._state.step_count >= self.MAX_STEPS:
             done = True
             if reward < 0.5:
@@ -404,6 +550,15 @@ class PshcaEnvironment(Environment):
         if self.cpu_usage[node] >= 90:
             self.active_alerts = [f"[Critical] {node} CPU at {self.cpu_usage[node]:.0f}% — imminent crash"]
             self.service_status["api"] = "Degraded"
+
+        NOISE_ALERTS = [
+            "[Info] Routine health check completed on db-replica",
+            f"[Warning] web-server-02 CPU at {random.randint(40,49)}% — within normal range",  
+            "[Info] Scheduled backup running on db-main",
+            "[Warning] SSL certificate expires in 89 days",
+        ]
+        if random.random() < 0.4:
+            self.active_alerts.append(random.choice(NOISE_ALERTS))
 
         r, d, f = self.grader_easy(action)
         if not d and self.cpu_usage[node] >= 100.0:
@@ -475,6 +630,24 @@ class PshcaEnvironment(Environment):
                 self.cpu_usage["web-server-02"] = 82.0
                 self.service_status["api"] = "Degraded"
                 self.active_alerts.append("[Warning] Web servers overloaded from DB timeouts")
+        elif sid == "C1":
+            if self.scenario_state == 1:
+                self.latency_ms["web-server-01"] = 1800
+                self.cpu_usage["web-server-01"] = 28.0
+                self.active_alerts = ["[Warning] High request queuing on web-server-01"]
+            elif self.scenario_state == 2:
+                self.latency_ms["web-server-01"] = 3500
+                self.error_rate["web-server-01"] = 25.0
+                self.active_alerts.append("[Critical] API timeouts exceeding configured limits")
+        elif sid == "H4":
+            if self.scenario_state == 1:
+                self.latency_ms["web-server-01"] = 850
+                self.error_rate["web-server-01"] = 15.0
+                self.active_alerts = ["[Warning] Elevated error rate on web-server-01"]
+            elif self.scenario_state == 2:
+                self.latency_ms["web-server-01"] = 1500
+                self.error_rate["web-server-01"] = 40.0
+                self.active_alerts.append("[Critical] 40% errors on web-server-01 (Canary failing)")
 
         r, d, f = self.grader_hard(action)
         if d and r > 0:

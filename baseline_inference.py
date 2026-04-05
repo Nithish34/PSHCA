@@ -69,6 +69,7 @@ VALID_ACTIONS = [
     "clear_cache",
     "failover_db",
     "wait",
+    "escalate_to_human",
 ]
 VALID_RESOURCES = ["web-server-01", "web-server-02", "db-main", "db-replica"]
 
@@ -130,9 +131,9 @@ def log_step(
     }), flush=True)
 
 
-def log_end(task: str, total_steps: int, final_reward: float, success: bool, elapsed: float) -> None:
+def log_end(task: str, total_steps: int, final_reward: float, success: bool, elapsed: float, postmortem: dict = None) -> None:
     """Emit the [END] structured log line when an episode terminates."""
-    print(json.dumps({
+    payload = {
         "type": "END",
         "task": task,
         "total_steps": total_steps,
@@ -140,7 +141,10 @@ def log_end(task: str, total_steps: int, final_reward: float, success: bool, ela
         "success": success,
         "elapsed_seconds": round(elapsed, 2),
         "timestamp": time.time(),
-    }), flush=True)
+    }
+    if postmortem:
+        payload["postmortem"] = postmortem
+    print(json.dumps(payload), flush=True)
 
 
 def obs_to_dict(obs) -> dict:
@@ -166,6 +170,10 @@ def obs_to_dict(obs) -> dict:
         d["disk_io"] = meta["disk_io"]
     if "feedback" in meta:
         d["feedback"] = meta["feedback"]
+    if "severity" in meta:
+        d["severity"] = meta["severity"]
+    if "blast_radius" in meta:
+        d["blast_radius"] = meta["blast_radius"]
     return d
 
 
@@ -198,6 +206,8 @@ Telemetry Signals (read ALL before acting):
   - disk_io        : Disk I/O per node (%). High on DB = leak or heavy paging.
   - active_alerts  : Live warning/critical/fatal messages — highest priority signal.
   - service_status : High-level health (Healthy / Degraded / Offline).
+  - severity       : Severity classification (SEV0 to SEV3). Acknowledge severity before acting.
+  - blast_radius   : List of downstream services affected by currently failing nodes.
 
 Decision Rules:
   1. Read ALL telemetry and active alerts before acting — the problem node is explicit.
@@ -206,8 +216,10 @@ Decision Rules:
   4. Memory leak on any node → clear_cache or failover_db on THAT specific node.
   5. Alert says 'bad deployment' or both web servers + DB are all spiking → rollback_deployment.
   6. Hard multi-step scenarios: fix the root cause first, then address secondary failures.
-  7. Never target a resource that is not one of: {VALID_RESOURCES}.
-  8. Repeating the same failed action incurs a penalty — try a different approach.
+  7. High latency but NORMAL CPU indicates a config drift problem — rollback_deployment.
+  8. If you cannot solve the issue securely, escalate_to_human. Premature escalation is penalised.
+  9. Never target a resource that is not one of: {VALID_RESOURCES}.
+  10. Repeating the same failed action incurs a penalty — try a different approach.
 
 Use this response schema so your decisions are interpretable:
     - thought: one short sentence explaining why this action is best now
@@ -406,6 +418,8 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
             f"  Error Rate % : {error_r}\n"
             f"  Disk I/O %   : {disk}\n"
             f"  Service Status: {obs.service_status}\n"
+            f"  Severity      : {meta.get('severity', 'UNKNOWN')}\n"
+            f"  Blast Radius  : {meta.get('blast_radius', [])}\n"
             f"  Active Alerts : {obs.active_alerts}\n"
             + (f"  Last Feedback : {feedback}\n" if feedback else "")
             + f"\nEpisode Memory (most recent first):\n{summarize_episode_memory(episode_memory)}\n\n"
@@ -532,6 +546,7 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
         final_reward=final_reward,
         success=success,
         elapsed=elapsed,
+        postmortem=env.generate_postmortem(),
     )
 
     return final_reward
