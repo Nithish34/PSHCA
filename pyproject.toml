@@ -10,8 +10,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openenv-pshca"
-version = "0.1.0"
-description = "Pshca environment for OpenEnv"
+version = "2.0.0"
+description = "PSHCA: Predictive Self-Healing Cloud Architect — an OpenEnv RL environment with 9 scenario variants, timing-aware rewards, and rich cloud telemetry for training and evaluating autonomous SRE agents."
 requires-python = ">=3.10"
 dependencies = [
     # Core OpenEnv runtime (provides FastAPI server + HTTP client types)

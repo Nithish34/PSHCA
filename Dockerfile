@@ -67,4 +67,5 @@ ENV PYTHONPATH="/app/env:$PYTHONPATH"
 EXPOSE 8000
 
 # Start the FastAPI server on port 8000
-CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
+# ENABLE_WEB_INTERFACE=false ensures our custom dashboard always loads (never Gradio)
+CMD ["sh", "-c", "cd /app/env && ENABLE_WEB_INTERFACE=false uvicorn server.app:app --host 0.0.0.0 --port 8000"]

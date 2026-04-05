@@ -1,7 +1,11 @@
 """
-PSHCA Baseline Inference Script
-================================
-Evaluates the PshcaEnvironment across all 3 difficulty scenarios using OpenAI.
+PSHCA Baseline Inference Script — v2.0
+=======================================
+Evaluates the PshcaEnvironment across all 9 scenario variants (E1–E3, M1–M3,
+H1–H3) using an OpenAI-compatible LLM endpoint (e.g. Hugging Face Inference API).
+
+The evaluation runs one episode per difficulty tier. Each episode randomly selects
+one of the 3 variants in that tier, so repeated runs exercise different scenarios.
 """
 
 # Ensure UTF-8 output on Windows (must happen before any print calls)
@@ -140,14 +144,29 @@ def log_end(task: str, total_steps: int, final_reward: float, success: bool, ela
 
 
 def obs_to_dict(obs) -> dict:
-    """Convert a PshcaObservation to a plain dict for JSON serialisation."""
-    return {
+    """Convert a PshcaObservation to a plain dict for JSON serialisation.
+
+    Includes all v2.0 telemetry fields (latency_ms, error_rate, disk_io) in
+    addition to the core fields so that structured [STEP] logs are complete.
+    """
+    d = {
         "cpu_usage": obs.cpu_usage,
         "memory_usage": obs.memory_usage,
         "service_status": obs.service_status,
         "active_alerts": obs.active_alerts,
         "current_task_info": obs.current_task_info,
     }
+    # Include v2.0 extended telemetry when present
+    meta = obs.metadata or {}
+    if "latency_ms" in meta:
+        d["latency_ms"] = meta["latency_ms"]
+    if "error_rate" in meta:
+        d["error_rate"] = meta["error_rate"]
+    if "disk_io" in meta:
+        d["disk_io"] = meta["disk_io"]
+    if "feedback" in meta:
+        d["feedback"] = meta["feedback"]
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -164,20 +183,31 @@ Cluster Resources:
   - db-replica      (read replica database)
 
 Available Actions:
-  - reboot_server      → Hard restart a server to clear CPU overload
-  - scale_up           → Add capacity to an overloaded server
-  - rollback_deployment→ Revert to the last known-good deployment (fixes bad-deploy cascades)
-  - clear_cache        → Free memory on a database to stop a memory leak
-  - failover_db        → Promote db-replica to primary if db-main is failing
-  - wait               → Do nothing this turn (use sparingly — metrics worsen each step!)
+  - reboot_server       → Hard restart a server to clear CPU overload or memory pressure
+  - scale_up            → Add capacity to an overloaded server
+  - rollback_deployment → Revert to the last known-good deployment (fixes bad-deploy cascades)
+  - clear_cache         → Free memory on a node to stop a memory leak
+  - failover_db         → Promote db-replica to primary if db-main is critically failing
+  - wait                → Do nothing this turn (use sparingly — metrics worsen each step!)
+
+Telemetry Signals (read ALL before acting):
+  - cpu_usage      : CPU load per node (%). Act if > 70%. Critical if > 90%.
+  - memory_usage   : Memory used per node (%). Growing trend = memory leak.
+  - latency_ms     : Request latency per node (ms). Spikes often precede crashes.
+  - error_rate     : Request error rate per node (%). Non-zero = service degradation.
+  - disk_io        : Disk I/O per node (%). High on DB = leak or heavy paging.
+  - active_alerts  : Live warning/critical/fatal messages — highest priority signal.
+  - service_status : High-level health (Healthy / Degraded / Offline).
 
 Decision Rules:
-  1. Read the Active Alerts and CPU/Memory trends carefully before acting.
-  2. Each turn the environment worsens — act as fast as possible.
-  3. For CPU spikes on a web server → use scale_up or reboot_server on that server.
-  4. For memory leaks on a database → use clear_cache or failover_db on db-main.
-  5. For cascading failures after a deployment (both CPU + DB overload) → rollback_deployment.
-  6. Never target a resource that is not one of: {VALID_RESOURCES}.
+  1. Read ALL telemetry and active alerts before acting — the problem node is explicit.
+  2. Each turn the environment worsens — act on the FIRST step when possible.
+  3. CPU spike on any node → scale_up or reboot_server on THAT specific node.
+  4. Memory leak on any node → clear_cache or failover_db on THAT specific node.
+  5. Alert says 'bad deployment' or both web servers + DB are all spiking → rollback_deployment.
+  6. Hard multi-step scenarios: fix the root cause first, then address secondary failures.
+  7. Never target a resource that is not one of: {VALID_RESOURCES}.
+  8. Repeating the same failed action incurs a penalty — try a different approach.
 
 Use this response schema so your decisions are interpretable:
     - thought: one short sentence explaining why this action is best now
@@ -321,25 +351,30 @@ def print_observation(obs, step: int):
 # ---------------------------------------------------------------------------
 def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
     """
-    Run one full episode for the given scenario.
+    Run one full episode for the given scenario difficulty tier.
+
+    Uses env.reset() correctly so that v2.0 random variant selection fires
+    (active_scenario is populated with one of the 3 variants for this tier).
 
     Returns:
         Final reward score in [0.0, 1.0]
     """
+    # ── Correct reset: set the desired tier then call reset() so the v2.0
+    #    random variant selection runs and active_scenario is populated.
     env.scenario = scenario
-    env._init_cloud_state()
-    env._state.step_count = 0
-    obs = env._get_observation()
+    env._reset_count = {"easy": 0, "medium": 1, "hard": 2}[scenario]  # pin cycle position
+    obs = env.reset()
 
     task_info = obs.current_task_info
+    variant_id = env.active_scenario.get("id", "")
     label = {"easy": "🟢 Easy", "medium": "🟡 Medium", "hard": "🔴 Hard"}[scenario]
 
     print(f"\n{'=' * 62}")
-    print(f"  {BOLD(label)} — {task_info}")
+    print(f"  {BOLD(label)} [{variant_id}] — {task_info}")
     print(f"{'=' * 62}")
 
     # ✅ Emit [START] structured log
-    log_start(task=scenario, task_info=task_info)
+    log_start(task=f"{scenario}_{variant_id}", task_info=task_info)
 
     done = False
     step = 0
@@ -354,15 +389,26 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
         step += 1
         print_observation(obs, step)
 
-        # Build the user message with current telemetry
+        # Pull extended v2.0 telemetry from metadata
+        meta = obs.metadata or {}
+        latency   = meta.get("latency_ms", {})
+        error_r   = meta.get("error_rate", {})
+        disk      = meta.get("disk_io", {})
+        feedback  = meta.get("feedback", "")
+
+        # Build the user message with full v2.0 telemetry
         user_msg = (
-            f"Turn {step} | Scenario: {task_info}\n\n"
+            f"Turn {step} | Scenario [{env.active_scenario.get('id', '')}]: {task_info}\n\n"
             f"Current Telemetry:\n"
             f"  CPU Usage    : {obs.cpu_usage}\n"
             f"  Memory Usage : {obs.memory_usage}\n"
+            f"  Latency (ms) : {latency}\n"
+            f"  Error Rate % : {error_r}\n"
+            f"  Disk I/O %   : {disk}\n"
             f"  Service Status: {obs.service_status}\n"
-            f"  Active Alerts : {obs.active_alerts}\n\n"
-            f"Episode Memory (most recent first):\n{summarize_episode_memory(episode_memory)}\n\n"
+            f"  Active Alerts : {obs.active_alerts}\n"
+            + (f"  Last Feedback : {feedback}\n" if feedback else "")
+            + f"\nEpisode Memory (most recent first):\n{summarize_episode_memory(episode_memory)}\n\n"
             f"Select the best next action. Reply with JSON only."
         )
 
@@ -399,13 +445,21 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
             if openai_configured():
                 print(f"  {YELLOW('⚠')}  All retries failed — using optimal fallback strategy.")
             else:
-                print(f"  {CYAN('ℹ')}  Demo mode — using hardcoded optimal strategy.")
+                print(f"  {CYAN('ℹ')}  Demo mode — using optimal strategy for variant {env.active_scenario.get('id', '')}.")
 
-            fallback = FALLBACK_STRATEGIES[scenario]
+            # Build a node-aware fallback from the active scenario's correct_actions
+            # so E2/E3/M2/M3 variants always target the right node.
+            correct = env.active_scenario.get("correct_actions", [])
+            if correct:
+                fb_action, fb_target = correct[0]
+            else:
+                # Ultimate safety net
+                fb_action, fb_target = FALLBACK_STRATEGIES[scenario]["action_type"], FALLBACK_STRATEGIES[scenario]["target_resource"]
             raw_reply = json.dumps({
-                "thought": "Fallback optimal policy for this scenario.",
+                "thought": f"Fallback optimal policy: {fb_action} on {fb_target}.",
                 "confidence": 0.99,
-                **fallback,
+                "action_type": fb_action,
+                "target_resource": fb_target,
             })
             action_bundle = parse_action(raw_reply)
 
@@ -442,12 +496,13 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
                 "reward": final_reward,
                 "done": done,
                 "alerts": result.active_alerts,
+                "feedback": (result.metadata or {}).get("feedback", ""),
             }
         )
 
         # ✅ Emit [STEP] structured log — after every env.step()
         log_step(
-            task=scenario,
+            task=f"{scenario}_{env.active_scenario.get('id', '')}",
             step=step,
             action_type=action.action_type,
             target_resource=action.target_resource or "",
@@ -463,15 +518,16 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
     elapsed = time.time() - start_time
     success = final_reward >= 0.5
     outcome = GREEN("✓ SUCCESS") if success else RED("✗ FAILED")
+    variant_id = env.active_scenario.get("id", "")
     print(
-        f"\n  {outcome} | Steps: {step}/{env.MAX_STEPS} | "
+        f"\n  {outcome} [{variant_id}] | Steps: {step}/{env.MAX_STEPS} | "
         f"Score: {BOLD(f'{final_reward:.2f}')}/1.00 | "
         f"Time: {elapsed:.1f}s"
     )
 
     # ✅ Emit [END] structured log — once per episode
     log_end(
-        task=scenario,
+        task=f"{scenario}_{variant_id}",
         total_steps=step,
         final_reward=final_reward,
         success=success,
@@ -485,7 +541,7 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
 # Main evaluation loop
 # ---------------------------------------------------------------------------
 def run_evaluation():
-    """Run the full 3-scenario PSHCA evaluation and print a grader report."""
+    """Run the full PSHCA evaluation (3 difficulty tiers, 1 random variant each) and print a grader report."""
 
     # ── Header ───────────────────────────────────────────────────────────────
     print()

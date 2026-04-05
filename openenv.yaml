@@ -1,6 +1,6 @@
 version: "1.0"
 name: "predictive-cloud-architect"
-description: "An OpenEnv-compliant RL environment for autonomous microservice orchestration, proactive autoscaling, and incident mitigation."
+description: "An OpenEnv-compliant RL environment for autonomous microservice orchestration, proactive autoscaling, and incident mitigation. v2.0 features 9 scenario variants across 3 difficulty tiers with negative reward signals, timing-aware scoring, and rich telemetry (CPU, Memory, Latency, Error Rate, Disk I/O)."
 readme: "README.md"
 entrypoint: "server.PSHCA_environment:PshcaEnvironment"
 models:
@@ -8,11 +8,11 @@ models:
   action: "models:PshcaAction"
 tasks:
   - id: "task_1_easy"
-    description: "CPU Spike Response: web-server-01 experiences a rapid CPU surge. Scale up or reboot it before the crash threshold is reached."
+    description: "CPU Spike Response (E1–E3): One of the cluster nodes — web-server-01, web-server-02, or db-replica — experiences a rapid CPU surge. The variant is selected randomly per episode. The agent must identify the correct node from telemetry and apply scale_up or reboot_server before the crash threshold is reached."
     difficulty: "easy"
   - id: "task_2_medium"
-    description: "Memory Leak Recovery: db-main develops a gradual memory leak. Clear its cache or failover the DB before it crashes out-of-memory."
+    description: "Memory Leak Recovery (M1–M3): A gradual memory leak develops on one of db-main, db-replica, or web-server-01 — selected randomly per episode. The agent must detect the leaking node from rising memory and latency trends and apply clear_cache or failover_db before an out-of-memory crash."
     difficulty: "medium"
   - id: "task_3_hard"
-    description: "Cascading Deployment Failure: A bad deployment overloads both web servers and the primary DB. Trace the root cause and rollback the deployment to restore full service."
+    description: "Cascading Failure (H1–H3): A multi-service incident propagates across the cluster. H1 requires a single rollback_deployment; H2 and H3 require a correct two-action sequence (root cause fix followed by secondary mitigation). The agent must trace the cascade from alert signals and act in the correct order."
     difficulty: "hard"

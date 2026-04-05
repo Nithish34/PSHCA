@@ -328,6 +328,9 @@ class PshcaEnvironment(Environment):
         return PshcaObservation(
             cpu_usage=self.cpu_usage.copy(),
             memory_usage=self.memory_usage.copy(),
+            latency_ms=self.latency_ms.copy(),
+            error_rate=self.error_rate.copy(),
+            disk_io=self.disk_io.copy(),
             active_alerts=list(self.active_alerts),
             service_status=self.service_status.copy(),
             current_task_info=self.get_task_info(),
