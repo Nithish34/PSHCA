@@ -48,8 +48,8 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 
-from server.PSHCA_environment import PshcaEnvironment
-from models import PshcaAction
+from server.PSHCA_environment import PshcaEnvironment  # type: ignore
+from models import PshcaAction  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Configuration

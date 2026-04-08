@@ -13,7 +13,7 @@ load_dotenv()
 
 import os
 
-from baseline_inference import run_evaluation
+from baseline_inference import run_evaluation  # type: ignore
 
 
 def build_hf_client():

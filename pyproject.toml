@@ -44,3 +44,6 @@ inference = "PSHCA.inference:main"
 include-package-data = true
 packages = ["PSHCA", "PSHCA.server"]
 package-dir = { "PSHCA" = ".", "PSHCA.server" = "server" }
+
+[tool.pyright]
+extraPaths = ["."]
