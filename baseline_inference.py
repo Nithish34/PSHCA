@@ -94,6 +94,7 @@ DIM    = lambda t: _c("2",  t)
 # ---------------------------------------------------------------------------
 def log_start(task: str, task_info: str) -> None:
     """Emit the [START] structured log line for a new episode."""
+    print(f"[START] task={task}", flush=True)
     print(json.dumps({
         "type": "START",
         "task": task,
@@ -114,6 +115,7 @@ def log_step(
     observation: dict,
 ) -> None:
     """Emit a [STEP] structured log line after each env.step() call."""
+    print(f"[STEP] step={step} reward={reward}", flush=True)
     print(json.dumps({
         "type": "STEP",
         "task": task,
@@ -133,6 +135,7 @@ def log_step(
 
 def log_end(task: str, total_steps: int, final_reward: float, success: bool, elapsed: float, postmortem: dict = None) -> None:
     """Emit the [END] structured log line when an episode terminates."""
+    print(f"[END] task={task} score={final_reward} steps={total_steps}", flush=True)
     payload = {
         "type": "END",
         "task": task,
