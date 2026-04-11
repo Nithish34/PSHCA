@@ -58,8 +58,19 @@ MAX_RETRIES: int = 3          # JSON parse / API retries per step
 TEMPERATURE: float = 0.0      # Deterministic output for reproducibility
 
 
+def _get_api_key() -> str:
+    """Return the API key, preferring the hackathon-injected API_KEY over local HF_TOKEN."""
+    return os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
+
+
 def openai_configured() -> bool:
-    return all(os.environ.get(key) for key in ["API_BASE_URL", "HF_TOKEN", "MODEL_NAME"])
+    """Return True when the minimum env vars for LLM inference are present.
+
+    The hackathon validator injects API_BASE_URL + API_KEY + MODEL_NAME.
+    Local development may use HF_TOKEN instead of API_KEY.
+    """
+    has_key = bool(os.environ.get("API_KEY") or os.environ.get("HF_TOKEN"))
+    return bool(os.environ.get("API_BASE_URL")) and has_key and bool(os.environ.get("MODEL_NAME"))
 
 # Valid action and resource values (used in the system prompt and for validation)
 VALID_ACTIONS = [
@@ -252,7 +263,7 @@ def call_openai(messages: list) -> str:
 
     client = OpenAI(
         base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["HF_TOKEN"],
+        api_key=_get_api_key(),
     )
     model = os.environ["MODEL_NAME"]
 
@@ -568,10 +579,11 @@ def run_evaluation():
     print(BOLD("╚══════════════════════════════════════════════════════════╝"))
 
     if openai_configured():
-        print(f"  Mode  : {GREEN('OpenAI-compatible HF')} ({os.environ['MODEL_NAME']})")
+        key_src = "API_KEY" if os.environ.get("API_KEY") else "HF_TOKEN"
+        print(f"  Mode  : {GREEN('OpenAI-compatible LLM')} ({os.environ['MODEL_NAME']}) [key={key_src}]")
     else:
-        print(f"  Mode  : {YELLOW('Demo')} (set API_BASE_URL / HF_TOKEN / MODEL_NAME to enable real inference)")
-        print(f"  Tip   : export API_BASE_URL=... HF_TOKEN=... MODEL_NAME=...")
+        print(f"  Mode  : {YELLOW('Demo')} (set API_BASE_URL / API_KEY / MODEL_NAME to enable real inference)")
+        print(f"  Tip   : export API_BASE_URL=... API_KEY=... MODEL_NAME=...")
 
     print(f"  MaxSteps/Scenario: {PshcaEnvironment.MAX_STEPS}")
     print()
