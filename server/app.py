@@ -17,20 +17,38 @@ from models import PshcaAction, PshcaObservation
 from server.PSHCA_environment import PshcaEnvironment
 
 import asyncio, json
+from contextlib import asynccontextmanager
 from fastapi import Body
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+
+# ── Dashboard state (initialised in lifespan, not at import time) ─────────────
+dashboard_env: PshcaEnvironment = None  # type: ignore[assignment]
+dashboard_lock: asyncio.Lock = None     # type: ignore[assignment]
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """Initialise async resources on startup; clean up on shutdown."""
+    global dashboard_env, dashboard_lock
+    dashboard_lock = asyncio.Lock()
+    dashboard_env = PshcaEnvironment()
+    dashboard_env.reset()
+    yield
+    # Nothing to explicitly clean up
+
 
 # Use create_fastapi_app — pure FastAPI, no Gradio, ignores ENABLE_WEB_INTERFACE
 app = create_fastapi_app(PshcaEnvironment, PshcaAction, PshcaObservation, max_concurrent_envs=1)
 
-dashboard_env = PshcaEnvironment()
-dashboard_env.reset()
-dashboard_lock = asyncio.Lock()
+# Attach lifespan to the app
+app.router.lifespan_context = lifespan
+
 
 def get_dashboard_html():
     html_path = os.path.join(os.path.dirname(__file__), '..', 'preview_dashboard.html')
     with open(html_path, 'r', encoding='utf-8') as f:
         return f.read()
+
 
 # Strip any conflicting routes openenv may have registered for these paths
 app.router.routes = [
@@ -48,9 +66,6 @@ app.router.routes = [
 async def dashboard_page():
     return HTMLResponse(content=get_dashboard_html())
 
-@app.get("/health")
-async def health_check():
-    return {"status": "ok"}
 
 @app.post("/dashboard/reset")
 async def dashboard_reset():
@@ -61,6 +76,7 @@ async def dashboard_reset():
             "scenario": dashboard_env.scenario,
             "snapshot": dashboard_env.get_dashboard_snapshot()
         })
+
 
 @app.post("/dashboard/step")
 async def dashboard_step(action: PshcaAction = Body(...)):
@@ -75,20 +91,24 @@ async def dashboard_step(action: PshcaAction = Body(...)):
             "snapshot": dashboard_env.get_dashboard_snapshot()
         })
 
+
 @app.get("/dashboard/state")
 async def dashboard_state():
     async with dashboard_lock:
         return JSONResponse(dashboard_env.get_dashboard_snapshot())
 
+
 @app.get("/dashboard/events")
 async def dashboard_events():
     async def stream():
         while True:
+            # Take a snapshot without holding the lock for the entire sleep
             async with dashboard_lock:
                 payload = dashboard_env.get_dashboard_snapshot()
             yield f"data: {json.dumps(payload)}\n\n"
             await asyncio.sleep(1.0)
     return StreamingResponse(stream(), media_type="text/event-stream")
+
 
 def main():
     import uvicorn, argparse
@@ -97,6 +117,7 @@ def main():
     p.add_argument("--port", type=int, default=8000)
     args = p.parse_args()
     uvicorn.run(app, host=args.host, port=args.port)
+
 
 if __name__ == '__main__':
     main()
