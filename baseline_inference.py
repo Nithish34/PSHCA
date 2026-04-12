@@ -58,13 +58,6 @@ MAX_RETRIES: int = 3          # JSON parse / API retries per step
 TEMPERATURE: float = 0.0      # Deterministic output for reproducibility
 
 
-def openai_configured() -> bool:
-    """Return True when the minimum env vars for LLM inference are present.
-
-    The hackathon validator injects API_BASE_URL and API_KEY.
-    """
-    return "API_BASE_URL" in os.environ and "API_KEY" in os.environ
-
 # Valid action and resource values (used in the system prompt and for validation)
 VALID_ACTIONS = [
     "reboot_server",
@@ -434,53 +427,32 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
         action_bundle: Optional[Tuple[PshcaAction, str, float]] = None
 
         # --- OpenAI path ---
-        if openai_configured():
-            messages.append({"role": "user", "content": user_msg})
+        messages.append({"role": "user", "content": user_msg})
 
-            for attempt in range(1, MAX_RETRIES + 1):
-                try:
-                    raw_reply = call_openai(messages)
-                    action_bundle = parse_action(raw_reply)
-                    if action_bundle:
-                        # Add assistant reply to history so the model has context
-                        messages.append({"role": "assistant", "content": raw_reply})
-                        break
-                    else:
-                        # Ask it to retry with explicit correction message
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                f"Your response could not be parsed as JSON (attempt {attempt}/{MAX_RETRIES}). "
-                                f"Reply ONLY with valid JSON: "
-                                f'{{\"thought\": \"<brief reason>\", \"confidence\": 0.0, \"action_type\": \"<action>\", \"target_resource\": \"<resource>\"}}'
-                            ),
-                        })
-                except Exception as exc:
-                    print(f"  {RED('✗')}  OpenAI API error (attempt {attempt}/{MAX_RETRIES}): {exc}")
-                    time.sleep(1.5 * attempt)  # Exponential back-off
-
-        # --- Fallback / demo path ---
-        if action_bundle is None:
-            if openai_configured():
-                raise RuntimeError("Failed to get valid action from OpenAI. Bypassing is prohibited.")
-            else:
-                print(f"  {CYAN('ℹ')}  Demo mode — using optimal strategy for variant {env.active_scenario.get('id', '')}.")
-
-                # Build a node-aware fallback from the active scenario's correct_actions
-                # so E2/E3/M2/M3 variants always target the right node.
-                correct = env.active_scenario.get("correct_actions", [])
-                if correct:
-                    fb_action, fb_target = correct[0]
-                else:
-                    # Ultimate safety net
-                    fb_action, fb_target = FALLBACK_STRATEGIES[scenario]["action_type"], FALLBACK_STRATEGIES[scenario]["target_resource"]
-                raw_reply = json.dumps({
-                    "thought": f"Fallback optimal policy: {fb_action} on {fb_target}.",
-                    "confidence": 0.99,
-                    "action_type": fb_action,
-                    "target_resource": fb_target,
-                })
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                raw_reply = call_openai(messages)
                 action_bundle = parse_action(raw_reply)
+                if action_bundle:
+                    # Add assistant reply to history so the model has context
+                    messages.append({"role": "assistant", "content": raw_reply})
+                    break
+                else:
+                    # Ask it to retry with explicit correction message
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Your response could not be parsed as JSON (attempt {attempt}/{MAX_RETRIES}). "
+                            f"Reply ONLY with valid JSON: "
+                            f'{{\"thought\": \"<brief reason>\", \"confidence\": 0.0, \"action_type\": \"<action>\", \"target_resource\": \"<resource>\"}}'
+                        ),
+                    })
+            except Exception as exc:
+                print(f"  {RED('✗')}  OpenAI API error (attempt {attempt}/{MAX_RETRIES}): {exc}")
+                time.sleep(1.5 * attempt)  # Exponential back-off
+
+        if action_bundle is None:
+            raise RuntimeError("Failed to get valid action from OpenAI. Bypassing is prohibited.")
 
         if action_bundle is None:
             # Final guard: should never happen, but keep the loop safe.
@@ -569,11 +541,7 @@ def run_evaluation():
     print(BOLD("║       PSHCA Agent Baseline Evaluation                   ║"))
     print(BOLD("╚══════════════════════════════════════════════════════════╝"))
 
-    if openai_configured():
-        print(f"  Mode  : {GREEN('OpenAI-compatible LLM')} ({os.environ.get('MODEL_NAME', 'default')}) [key=API_KEY]")
-    else:
-        print(f"  Mode  : {YELLOW('Demo')} (set API_BASE_URL / API_KEY / MODEL_NAME to enable real inference)")
-        print(f"  Tip   : export API_BASE_URL=... API_KEY=... MODEL_NAME=...")
+    print(f"  Mode  : {GREEN('OpenAI-compatible LLM')} ({os.environ.get('MODEL_NAME', 'default')}) [key=API_KEY]")
 
     print(f"  MaxSteps/Scenario: {PshcaEnvironment.MAX_STEPS}")
     print()

@@ -14,10 +14,7 @@ Local development fallback:
 
 import os
 
-# Only load .env locally. The hackathon validator injects these securely on remote servers.
-if "API_BASE_URL" not in os.environ:
-    from dotenv import load_dotenv
-    load_dotenv()
+# Removed dotenv to ensure strict reliance on validator-injected variables.
 
 from baseline_inference import run_evaluation  # type: ignore
 
@@ -46,9 +43,8 @@ def main() -> int:
     - Delegates all evaluation logic to baseline_inference.run_evaluation().
     - Returns exit code 0 (pass) or 1 (fail).
     """
-    if "API_BASE_URL" in os.environ and "API_KEY" in os.environ:
-        # Warm up the client to surface credential errors early
-        build_hf_client()
+    # Always build the client to ensure it crashes early if env vars are missing
+    build_hf_client()
 
     return run_evaluation()
 
