@@ -19,26 +19,18 @@ import os
 from baseline_inference import run_evaluation  # type: ignore
 
 
-def _get_api_key() -> str:
-    """Return API key: prefer hackathon-injected API_KEY, fall back to HF_TOKEN."""
-    return os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
-
-
 def build_hf_client():
     """
     Construct and return an (OpenAI client, model_name) tuple using the
     mandatory hackathon environment variables.
-
-    The hackathon proxy injects API_BASE_URL + API_KEY + MODEL_NAME.
-    For local dev, HF_TOKEN is accepted in place of API_KEY.
     """
     from openai import OpenAI
 
     client = OpenAI(
         base_url=os.environ["API_BASE_URL"],
-        api_key=_get_api_key(),
+        api_key=os.environ["API_KEY"],
     )
-    model = os.environ["MODEL_NAME"]
+    model = os.environ.get("MODEL_NAME", "default")
     return client, model
 
 
@@ -51,9 +43,7 @@ def main() -> int:
     - Delegates all evaluation logic to baseline_inference.run_evaluation().
     - Returns exit code 0 (pass) or 1 (fail).
     """
-    # Accept API_KEY (hackathon-injected) or HF_TOKEN (local dev)
-    has_key = bool(os.environ.get("API_KEY") or os.environ.get("HF_TOKEN"))
-    if os.environ.get("API_BASE_URL") and has_key and os.environ.get("MODEL_NAME"):
+    if "API_BASE_URL" in os.environ and "API_KEY" in os.environ:
         # Warm up the client to surface credential errors early
         build_hf_client()
 
