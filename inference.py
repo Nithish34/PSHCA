@@ -11,10 +11,13 @@ Required environment variables (hackathon validator injects these):
 Local development fallback:
     HF_TOKEN      – Hugging Face token (used when API_KEY is not set)
 """
-from dotenv import load_dotenv
-load_dotenv()
 
 import os
+
+# Only load .env locally. The hackathon validator injects these securely on remote servers.
+if "API_BASE_URL" not in os.environ:
+    from dotenv import load_dotenv
+    load_dotenv()
 
 from baseline_inference import run_evaluation  # type: ignore
 
@@ -28,7 +31,7 @@ def build_hf_client():
 
     client = OpenAI(
         base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
+        api_key=os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", ""),
     )
     model = os.environ.get("MODEL_NAME", "default")
     return client, model
@@ -43,7 +46,7 @@ def main() -> int:
     - Delegates all evaluation logic to baseline_inference.run_evaluation().
     - Returns exit code 0 (pass) or 1 (fail).
     """
-    if "API_BASE_URL" in os.environ and "API_KEY" in os.environ:
+    if "API_BASE_URL" in os.environ and ("API_KEY" in os.environ or "HF_TOKEN" in os.environ):
         # Warm up the client to surface credential errors early
         build_hf_client()
 

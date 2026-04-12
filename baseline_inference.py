@@ -63,7 +63,7 @@ def openai_configured() -> bool:
 
     The hackathon validator injects API_BASE_URL and API_KEY.
     """
-    return "API_BASE_URL" in os.environ and "API_KEY" in os.environ
+    return "API_BASE_URL" in os.environ and ("API_KEY" in os.environ or "HF_TOKEN" in os.environ)
 
 # Valid action and resource values (used in the system prompt and for validation)
 VALID_ACTIONS = [
@@ -256,7 +256,7 @@ def call_openai(messages: list) -> str:
 
     client = OpenAI(
         base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
+        api_key=os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", ""),
     )
     model = os.environ.get("MODEL_NAME", "default")
 
@@ -264,8 +264,6 @@ def call_openai(messages: list) -> str:
         model=model,
         messages=messages,
         temperature=TEMPERATURE,
-        max_tokens=64,       # Actions are short JSON — no need for a large window
-        timeout=30,
     )
     return response.choices[0].message.content.strip()
 
@@ -464,25 +462,25 @@ def run_scenario(env: PshcaEnvironment, scenario: str) -> float:
         # --- Fallback / demo path ---
         if action_bundle is None:
             if openai_configured():
-                print(f"  {YELLOW('⚠')}  All retries failed — using optimal fallback strategy.")
+                raise RuntimeError("Failed to get valid action from OpenAI. Bypassing is prohibited.")
             else:
                 print(f"  {CYAN('ℹ')}  Demo mode — using optimal strategy for variant {env.active_scenario.get('id', '')}.")
 
-            # Build a node-aware fallback from the active scenario's correct_actions
-            # so E2/E3/M2/M3 variants always target the right node.
-            correct = env.active_scenario.get("correct_actions", [])
-            if correct:
-                fb_action, fb_target = correct[0]
-            else:
-                # Ultimate safety net
-                fb_action, fb_target = FALLBACK_STRATEGIES[scenario]["action_type"], FALLBACK_STRATEGIES[scenario]["target_resource"]
-            raw_reply = json.dumps({
-                "thought": f"Fallback optimal policy: {fb_action} on {fb_target}.",
-                "confidence": 0.99,
-                "action_type": fb_action,
-                "target_resource": fb_target,
-            })
-            action_bundle = parse_action(raw_reply)
+                # Build a node-aware fallback from the active scenario's correct_actions
+                # so E2/E3/M2/M3 variants always target the right node.
+                correct = env.active_scenario.get("correct_actions", [])
+                if correct:
+                    fb_action, fb_target = correct[0]
+                else:
+                    # Ultimate safety net
+                    fb_action, fb_target = FALLBACK_STRATEGIES[scenario]["action_type"], FALLBACK_STRATEGIES[scenario]["target_resource"]
+                raw_reply = json.dumps({
+                    "thought": f"Fallback optimal policy: {fb_action} on {fb_target}.",
+                    "confidence": 0.99,
+                    "action_type": fb_action,
+                    "target_resource": fb_target,
+                })
+                action_bundle = parse_action(raw_reply)
 
         if action_bundle is None:
             # Final guard: should never happen, but keep the loop safe.
