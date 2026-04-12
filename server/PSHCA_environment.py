@@ -528,7 +528,7 @@ class PshcaEnvironment(Environment):
             if reward < 0.5:
                 reward, feedback = 0.0, "Timeout — cluster crashed. Episode failed."
 
-        final_score = max(-1.0, min(1.0, reward))
+        final_score = max(0.01, min(0.99, reward))
         self.cumulative_reward += final_score
         self.last_action = {"action_type": action.action_type, "target_resource": action.target_resource}
         self._record_event(action, final_score, done, feedback)
