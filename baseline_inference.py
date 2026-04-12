@@ -63,7 +63,7 @@ def openai_configured() -> bool:
 
     The hackathon validator injects API_BASE_URL and API_KEY.
     """
-    return "API_BASE_URL" in os.environ and ("API_KEY" in os.environ or "HF_TOKEN" in os.environ)
+    return "API_BASE_URL" in os.environ and "API_KEY" in os.environ
 
 # Valid action and resource values (used in the system prompt and for validation)
 VALID_ACTIONS = [
@@ -256,7 +256,7 @@ def call_openai(messages: list) -> str:
 
     client = OpenAI(
         base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", ""),
+        api_key=os.environ["API_KEY"],
     )
     model = os.environ.get("MODEL_NAME", "default")
 
